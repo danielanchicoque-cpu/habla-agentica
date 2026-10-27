@@ -1,0 +1,35 @@
+{
+  "name": "habla-agentica",
+  "productName": "Habla Agéntica",
+  "version": "0.1.0",
+  "description": "Dictado por voz en español con prompts editables",
+  "main": "src/main/index.js",
+  "author": "Daniel Anchicoque Martínez",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "vitest run",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "uiohook-napi": "1.5.5"
+  },
+  "devDependencies": {
+    "electron": "44.8.0",
+    "electron-builder": "26.15.3",
+    "vitest": "5.0.5"
+  },
+  "allowScripts": {
+    "electron@44.8.0": true,
+    "electron-winstaller@5.4.0": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danielanchicoque-cpu/habla-agentica.git"
+  },
+  "homepage": "https://github.com/danielanchicoque-cpu/habla-agentica#readme",
+  "bugs": {
+    "url": "https://github.com/danielanchicoque-cpu/habla-agentica/issues"
+  }
+}

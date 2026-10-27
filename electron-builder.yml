@@ -1,0 +1,32 @@
+appId: com.daniel.hablaagentica
+npmRebuild: false
+nodeGypRebuild: false
+productName: Habla Agéntica
+copyright: Copyright (c) 2026 Daniel Anchicoque Martínez
+directories:
+  output: dist
+files:
+  - src/**/*
+  - assets/**/*
+  - package.json
+  - "!**/*.map"
+asarUnpack:
+  - node_modules/uiohook-napi/**
+  - src/main/ayudante.ps1
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: assets/icono.png
+  executableName: HablaAgentica
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Habla Agéntica
+  uninstallDisplayName: Habla Agéntica
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  artifactName: HablaAgentica-Instalador-${version}.${ext}

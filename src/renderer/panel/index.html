@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <title>Habla Agéntica</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <aside class="lateral">
+    <div class="marca">
+      <img src="../../../assets/icono.png" alt="" width="32" height="32">
+      <div>
+        <strong>Habla Agéntica</strong>
+        <span id="estado-key" class="chip-estado">…</span>
+      </div>
+    </div>
+    <nav>
+      <button data-seccion="inicio"><span aria-hidden="true">⌂</span>Inicio</button>
+      <button data-seccion="prompts"><span aria-hidden="true">✦</span>Estilos y comandos</button>
+      <button data-seccion="diccionario"><span aria-hidden="true">Aa</span>Diccionario</button>
+      <button data-seccion="historial"><span aria-hidden="true">↺</span>Historial</button>
+      <button data-seccion="estadisticas"><span aria-hidden="true">▤</span>Estadísticas</button>
+      <button data-seccion="ajustes"><span aria-hidden="true">⚙</span>Ajustes</button>
+    </nav>
+    <p class="ayuda-atajo">Mantén <kbd id="atajo-lateral">…</kbd> y habla. Doble toque para manos libres.</p>
+  </aside>
+  <main id="contenido" tabindex="-1"></main>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="panel.js"></script>
+</body>
+</html>

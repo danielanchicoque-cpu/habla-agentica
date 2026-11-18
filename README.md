@@ -7,13 +7,16 @@ Dictado por voz para Windows. Hablas, la app limpia lo que dijiste (quita muleti
 
 ## Qué hace
 
-- **Dictas en cualquier programa.** Mantienes un atajo, hablas, sueltas, y el texto aparece en el cursor.
-- **Historial.** Guarda lo que dictaste, tanto el texto original como el limpio.
+- **Dictas en cualquier programa.** Mantienes un atajo, hablas, sueltas, y el texto aparece en el cursor. Con "Micrófono siempre listo" la grabación arranca sin esperar a que se abra el micrófono.
+- **Listas y párrafos.** "Anótame leche, huevos, pan, café" sale como lista con viñetas; los pasos salen numerados y los dictados largos se separan en párrafos.
+- **Aprende de tus correcciones.** Si después de pegar corriges una palabra, la agrega al diccionario y la próxima vez la escribe bien. También puedes corregir un dictado desde el Historial.
+- **Historial.** Guarda lo que dictaste, tanto el texto original como el limpio, y cuánto tardó cada etapa.
 - **Diccionario y snippets.** Enséñale nombres y palabras propias, y crea atajos de texto ("mi correo" escribe tu correo completo).
 - **Estilos por app.** El texto sale distinto según dónde escribes: informal en un chat, formal en Word, claro y ordenado cuando le hablas a una IA. Los puedes editar a tu gusto.
 - **Comandos de voz.** Sobre un texto seleccionado: hacerlo más formal, resumirlo, organizar las ideas o traducirlo al inglés.
 - **Importar desde Wispr Flow.** Si ya usabas Wispr Flow, trae tu diccionario, tus snippets y tu historial. Solo lee tus datos locales y no modifica nada de Wispr.
 - **Estadísticas.** Cuánto has dictado y cuánto tiempo te ahorra.
+- **Se actualiza sola.** Busca versiones nuevas, las descarga en segundo plano y te avisa para reiniciar.
 
 ## Descargar
 
@@ -21,7 +24,12 @@ Baja el instalador desde la última versión:
 
 **https://github.com/danielanchicoque-cpu/habla-agentica/releases/latest**
 
-Es una versión temprana, puede tener errores. El instalador no está firmado, así que Windows SmartScreen mostrará un aviso ("Windows protegió su PC"). Si confías en la fuente, pulsa **Más información** y luego **Ejecutar de todas formas**.
+El instalador no está firmado, así que Windows SmartScreen mostrará un aviso ("Windows protegió su PC"). Si confías en la fuente, pulsa **Más información** y luego **Ejecutar de todas formas**.
+
+### Actualizar
+
+- **Desde la 0.2.0:** la app se actualiza sola. Cuando haya una versión nueva verás un aviso en el panel (y una notificación de Windows); pulsa **Reiniciar y actualizar**. También puedes ir a **Ajustes → Actualizaciones → Buscar actualizaciones**. Si no reinicias, se instala al cerrar la app.
+- **Si tienes la 0.1.0:** esa versión no sabe actualizarse. Descarga e instala la última desde el enlace de arriba (conserva tus datos); de ahí en adelante ya se actualiza sola.
 
 ## Requisito: una API key de Groq
 
@@ -33,6 +41,19 @@ Hoy la app necesita una API key de Groq para transcribir y limpiar el texto. Es 
 
 La key se guarda cifrada en tu computador. Tu audio se envía a Groq para procesarlo, y no pasa por ningún otro servidor.
 
+## Atajos
+
+Se cambian en **Ajustes**. Puedes usar una combinación de teclas o una sola tecla que no estorbe al escribir: **Ctrl derecho**, **Insert**, **Bloq Despl** o **Pausa**. Si presionas otra tecla mientras mantienes un atajo de una sola tecla (por ejemplo Ctrl derecho + C), la app lo toma como un atajo normal y cancela el dictado en silencio.
+
+**La tecla Fn no se puede usar:** en casi todos los portátiles la procesa el teclado por dentro y Windows nunca se entera de que la presionaste.
+
+## Privacidad
+
+- La key de Groq se guarda cifrada con Windows.
+- El audio y el texto se envían a Groq para transcribir y limpiar; nada pasa por otro servidor.
+- **Aprender de tus correcciones** lee el texto del campo donde pegó durante un minuto (por UI Automation de Windows). Ese texto solo se compara en tu computador: no se guarda ni se envía, y los campos de contraseña se omiten. Se apaga en Ajustes.
+- **Micrófono siempre listo** deja el micrófono abierto, y Windows muestra su ícono, pero solo se graba mientras usas el atajo. Se apaga en Ajustes.
+
 ## Compilar desde el código
 
 Necesitas Node.js en Windows.
@@ -42,6 +63,20 @@ npm install
 npm start       # abre la app en modo desarrollo
 npm test        # corre las pruebas
 npm run dist    # genera el instalador en dist/
+```
+
+Si la ruta de la carpeta es muy larga, Windows puede fallar al cargar módulos nativos o al armar el instalador; trabaja en una ruta corta (por ejemplo `C:\habla`).
+
+### Publicar una versión
+
+Las actualizaciones automáticas leen las versiones (releases) de GitHub. Para publicar una:
+
+1. Sube el número de `version` en `package.json` y anótalo en `CHANGELOG.md`.
+2. `npm run dist`.
+3. Crea la versión en GitHub con **los tres archivos** de `dist/`: el instalador `.exe`, su `.exe.blockmap` y `latest.yml`. Sin `latest.yml` las apps instaladas no ven la versión nueva.
+
+```
+gh release create vX.Y.Z dist/HablaAgentica-Instalador-X.Y.Z.exe dist/HablaAgentica-Instalador-X.Y.Z.exe.blockmap dist/latest.yml --title "Habla Agéntica X.Y.Z" --notes-file notas.md
 ```
 
 ## Licencia

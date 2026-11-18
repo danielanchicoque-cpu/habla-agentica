@@ -2,24 +2,28 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
-const { app, BrowserWindow, Tray, Menu, ipcMain, clipboard, ClipboardItem, safeStorage, screen, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, clipboard, ClipboardItem, safeStorage, screen, nativeImage, Notification } = require('electron');
 
 app.setName('Habla Agentica');
 app.setAppUserModelId('com.daniel.hablaagentica');
 
 const { crearAlmacen } = require('./almacen');
-const { copiaFabrica } = require('./promptsFabrica');
+const { copiaFabrica, actualizarBase } = require('./promptsFabrica');
 const { crearDetector, conectarUiohook } = require('./atajos');
 const { crearSistema } = require('./sistema');
 const { crearPegador, portapapelesElectron, tecladoUiohook } = require('./pegador');
 const { crearSecretos, leerDpapiGroq } = require('./secretos');
 const { crearOrquestador } = require('./orquestador');
+const { crearAprendiz } = require('./aprendizaje');
+const { crearActualizador } = require('./actualizador');
 const { posicionPastilla, cursorSobrePastilla } = require('./posicionPastilla');
 const groq = require('./groq');
 
 const AJUSTES_POR_DEFECTO = {
   micId: null,
   sonidos: true,
+  micListo: true, // micrófono abierto entre dictados: el inicio es instantáneo
+  aprenderCorrecciones: true, // aprende palabras que corriges después de pegar
   silenciarAudio: true,
   abrirAlIniciar: true,
   modeloVoz: 'whisper-large-v3',
@@ -84,6 +88,14 @@ function crearPastilla(almacen) {
   pastilla.setIgnoreMouseEvents(true, { forward: true });
   pastilla.loadFile(path.join(__dirname, '..', 'renderer', 'pastilla', 'index.html'));
   pastilla.once('ready-to-show', () => pastilla.showInactive());
+  pastilla.webContents.once('did-finish-load', () => prepararMic(almacen));
+}
+
+// Deja el micrófono abierto y listo para que el dictado arranque al instante.
+function prepararMic(almacen) {
+  if (!pastilla || pastilla.isDestroyed() || PROBAR_PASTILLA) return;
+  const a = { ...AJUSTES_POR_DEFECTO, ...almacen.leer('ajustes', {}) };
+  pastilla.webContents.send('grabar:preparar', { deviceId: a.micId || null, micListo: a.micListo !== false });
 }
 
 function abrirPanel(seccion) {
@@ -175,11 +187,19 @@ function cablearRatonPastilla(almacen) {
     if (fase === 'inicio' && !arrastre) {
       const cursor = screen.getCursorScreenPoint();
       const [wx, wy] = pastilla.getPosition();
-      arrastre = { dx: cursor.x - wx, dy: cursor.y - wy, inicio: Date.now() };
+      arrastre = { dx: cursor.x - wx, dy: cursor.y - wy, inicio: Date.now(), x: wx, y: wy };
       pastilla.setIgnoreMouseEvents(false);
       arrastre.timer = setInterval(() => {
         const c = screen.getCursorScreenPoint();
-        pastilla.setPosition(c.x - arrastre.dx, c.y - arrastre.dy);
+        const x = c.x - arrastre.dx;
+        const y = c.y - arrastre.dy;
+        // Solo se mueve si el cursor se movió, y siempre con el mismo tamaño:
+        // con escala de pantalla ≠ 100 %, cada setPosition redondea y la
+        // ventana se iba corriendo hacia abajo aunque el mouse estuviera quieto.
+        if (x !== arrastre.x || y !== arrastre.y) {
+          arrastre.x = x; arrastre.y = y;
+          pastilla.setBounds({ x, y, width: TAM_PASTILLA.ancho, height: TAM_PASTILLA.alto });
+        }
         if (Date.now() - arrastre.inicio > 15000) terminar(); // por si se perdió el "soltar"
       }, 16);
     }
@@ -189,8 +209,8 @@ function cablearRatonPastilla(almacen) {
   require('uiohook-napi').uIOhook.on('mouseup', (e) => { if (e.button === 1 && arrastre) terminar(); });
   function terminar() {
     clearInterval(arrastre.timer);
+    const { x, y } = arrastre; // la posición pedida, no la redondeada por Windows
     arrastre = null;
-    const [x, y] = pastilla.getPosition();
     const ajustes = almacen.leer('ajustes', {});
     almacen.escribir('ajustes', { ...ajustes, posicionPastilla: { x, y } });
   }
@@ -205,7 +225,7 @@ function cablearAtajos(orquestador, almacen) {
       const d = crearDetector({ combo, ...reloj });
       d.on('iniciar', (tipo) => (tipo === 'manos-libres' ? orquestador.manosLibres() : orquestador.iniciar(modo)));
       d.on('detener', () => orquestador.detener());
-      d.on('cancelar', () => orquestador.cancelar());
+      d.on('cancelar', (opciones) => orquestador.cancelar(opciones));
       detectores.push(d);
     }
   }
@@ -239,6 +259,9 @@ async function arrancar() {
     almacen.escribir('diccionario', { palabras: [], snippets: [] });
     almacen.escribir('historial', []);
   }
+  // Reglas nuevas de pulido (listas, párrafos) para quien no editó las suyas.
+  const promptsNuevos = actualizarBase(almacen.leer('prompts', null));
+  if (promptsNuevos) almacen.escribir('prompts', promptsNuevos);
 
   sistema = crearSistema();
   sistema.calentar();
@@ -250,8 +273,18 @@ async function arrancar() {
   const pegador = crearPegador({ portapapeles, teclado: tecladoUiohook(), modificadoresPresionados: () => modificadores(), esperar, grabando: () => hayGrabacion() });
 
   crearPastilla(almacen);
+  const aprendiz = crearAprendiz({
+    sistema,
+    almacen,
+    esperar,
+    ahora: () => Date.now(),
+    generarId: () => crypto.randomUUID(),
+    avisar: (texto) => orquestador.avisar(texto),
+    activo: () => almacen.leer('ajustes', {}).aprenderCorrecciones !== false,
+  });
   const orquestador = crearOrquestador({
     almacen,
+    aprendiz,
     dirAudios: path.join(dirDatos, 'audios'),
     generarId: () => crypto.randomUUID(),
     ahora: () => new Date(),
@@ -330,8 +363,29 @@ async function arrancar() {
   modificadores = () => teclado.modificadoresPresionados();
   crearBandeja();
 
+  // Actualizaciones automáticas (solo en la app instalada, no en desarrollo).
+  let actualizador = null;
+  if (app.isPackaged) {
+    try {
+      const { autoUpdater } = require('electron-updater');
+      actualizador = crearActualizador({
+        autoUpdater,
+        versionActual: app.getVersion(),
+        alCambiar: (estado) => { if (panel && !panel.isDestroyed()) panel.webContents.send('actualizacion:estado', estado); },
+        alDescargar: (version) => {
+          const aviso = new Notification({ title: 'Habla Agéntica', body: `La versión ${version} está lista. Ábrela para reiniciar y actualizar.` });
+          aviso.on('click', () => abrirPanel('ajustes'));
+          aviso.show();
+        },
+      });
+      actualizador.iniciar();
+    } catch (e) {
+      console.error('Habla Agéntica: no se pudo iniciar el actualizador', e);
+    }
+  }
+
   try {
-    require('./ipc').registrar({ almacen, secretos, orquestador, pegador, groq, teclado, reconstruirAtajos, abrirPanel, pastilla: () => pastilla, AJUSTES_POR_DEFECTO });
+    require('./ipc').registrar({ actualizador, versionApp: app.getVersion(), almacen, secretos, orquestador, pegador, groq, teclado, reconstruirAtajos, abrirPanel, pastilla: () => pastilla, prepararMic: () => prepararMic(almacen), aprendiz, AJUSTES_POR_DEFECTO });
   } catch (e) {
     if (e.code !== 'MODULE_NOT_FOUND') throw e;
   }

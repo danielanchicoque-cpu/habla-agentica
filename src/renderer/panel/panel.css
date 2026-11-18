@@ -216,3 +216,7 @@ h2.grande { font-size: 20px; }
 .mapa i.racha, .leyenda i.racha { box-shadow: 0 0 0 1.5px #FFFFFF inset; }
 .leyenda { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 11px; color: var(--tenue); }
 .leyenda i { width: 12px; }
+
+.banner-actualizacion { margin: 0 6px 10px; padding: 10px 12px; border-radius: 10px; background: rgba(139, 92, 246, .14); border: 1px solid rgba(139, 92, 246, .4); font-size: 12px; line-height: 1.4; }
+.banner-actualizacion strong { display: block; margin-bottom: 6px; }
+.banner-actualizacion[hidden] { display: none; }

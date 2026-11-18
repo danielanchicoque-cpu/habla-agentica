@@ -7,7 +7,18 @@ const VENTANA_DOBLE_MS = 400;
 const ESC = 1;
 const MODIFICADORES = new Set([29, 3613, 42, 54, 56, 3640, 3675, 3676]);
 
-function crearDetector({ combo, ahora, programar }) {
+const CTRL_IZQ = 29;
+const ALT_DER = 3640;
+
+// AltGr llega como Ctrl izq (falso) + Alt der. Ese Ctrl falso a veces se
+// reporta suelto aunque AltGr siga abajo, y cortaba la grabación: si el
+// atajo tiene AltGr, se ignora.
+function normalizarCombo(combo) {
+  return combo.includes(ALT_DER) && combo.includes(CTRL_IZQ) ? combo.filter((k) => k !== CTRL_IZQ) : combo;
+}
+
+function crearDetector({ combo: comboOriginal, ahora, programar }) {
+  const combo = normalizarCombo(comboOriginal);
   const presionadas = new Set();
   const oyentes = { iniciar: [], detener: [], cancelar: [] };
   let estado = 'inactivo'; // inactivo | mantener | esperandoSegundo | manosLibres | ignorar
@@ -58,6 +69,14 @@ function crearDetector({ combo, ahora, programar }) {
         limpiarTimer();
         estado = comboCompleto ? 'ignorar' : 'inactivo';
         emitir('cancelar');
+        return;
+      }
+      // Otra tecla mientras se mantiene el atajo: era un atajo normal
+      // (p. ej. Ctrl der + C con un atajo de una sola tecla), no un dictado.
+      if (estado === 'mantener' && comboCompleto && !combo.includes(keycode) && !MODIFICADORES.has(keycode)) {
+        estado = 'ignorar';
+        presionadas.add(keycode);
+        emitir('cancelar', { silencioso: true });
         return;
       }
       presionadas.add(keycode);
@@ -125,4 +144,4 @@ function conectarUiohook(detectores) {
   };
 }
 
-module.exports = { crearDetector, conectarUiohook };
+module.exports = { crearDetector, conectarUiohook, normalizarCombo };

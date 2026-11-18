@@ -96,6 +96,45 @@ describe('detector de atajos', () => {
     expect(eventos).toEqual(['iniciar:mantener', 'iniciar:manos-libres', 'iniciar:mantener', 'detener']);
   });
 
+  it('otra tecla mientras se mantiene el atajo cancela (era un atajo normal)', () => {
+    const C = 46;
+    presionarCombo(); avanzar(100); down(C); up(C); avanzar(1000); soltarCombo(); avanzar(1000);
+    expect(eventos).toEqual(['iniciar:mantener', 'cancelar']);
+  });
+
+  it('en manos libres se puede escribir sin cancelar', () => {
+    const C = 46;
+    presionarCombo(); avanzar(50); soltarCombo(); avanzar(50); presionarCombo(); soltarCombo();
+    down(C); up(C);
+    expect(eventos).toEqual(['iniciar:mantener', 'iniciar:manos-libres']);
+  });
+
+  it('atajo de una sola tecla: mantener graba y soltar detiene', () => {
+    const d = crearDetector({ combo: [CTRL_DER], ahora: () => t, programar: () => () => {} });
+    const ev = [];
+    d.on('iniciar', (m) => ev.push(`iniciar:${m}`));
+    d.on('detener', () => ev.push('detener'));
+    d.tecla({ tipo: 'down', keycode: CTRL_DER }); t += 1000; d.tecla({ tipo: 'up', keycode: CTRL_DER });
+    expect(ev).toEqual(['iniciar:mantener', 'detener']);
+  });
+
+  it('AltGr + Shift: el Ctrl falso de AltGr no corta la grabación', () => {
+    const d = crearDetector({ combo: [29, 3640, 54], ahora: () => t, programar: () => () => {} });
+    const ev = [];
+    d.on('iniciar', (m) => ev.push(`iniciar:${m}`));
+    d.on('detener', () => ev.push('detener'));
+    d.on('cancelar', () => ev.push('cancelar'));
+    const tk = (tipo, k) => d.tecla({ tipo, keycode: k });
+    tk('down', 29); tk('down', 3640); tk('down', 54);
+    t += 100;
+    d.sincronizar([3640, 54]); // Windows reporta el Ctrl falso como suelto
+    tk('down', 29); tk('down', 3640); // autorepetición de AltGr
+    t += 1000;
+    tk('up', 54);
+    expect(ev).toEqual(['iniciar:mantener', 'detener']);
+    expect(d.combo).toEqual([3640, 54]);
+  });
+
   it('teclas repetidas (autorepeat) no reinician la grabación', () => {
     presionarCombo(); down(CTRL_DER); down(CTRL_DER); avanzar(1000); soltarCombo();
     expect(eventos).toEqual(['iniciar:mantener', 'detener']);

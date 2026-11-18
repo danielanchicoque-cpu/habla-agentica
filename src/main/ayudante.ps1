@@ -4,6 +4,7 @@
 #   {"id":2,"cmd":"silenciar"} -> silencia la salida de audio (recuerda el estado previo)
 #   {"id":3,"cmd":"restaurar"} -> vuelve al estado de audio previo
 #   {"id":4,"cmd":"teclas","codigos":[54,3613]} -> cuáles de esas teclas están presionadas
+#   {"id":5,"cmd":"texto"}     -> texto del campo con el foco (null si no se puede leer)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
@@ -94,6 +95,31 @@ public static class HablaAudio {
 '@
 
 $estadoPrevio = $null
+$uiaCargado = $false
+$MAX_TEXTO = 20000
+
+# Texto del campo que tiene el foco, leído por UI Automation (para que la app
+# vea qué corrigió el usuario y aprenda). Devuelve $null si el campo no lo
+# deja leer o es de contraseña.
+function Leer-TextoEnfocado {
+    if (-not $script:uiaCargado) {
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        $script:uiaCargado = $true
+    }
+    $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($null -eq $el -or $el.Current.IsPassword) { return $null }
+    $texto = $null
+    $tp = $null
+    if ($el.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$tp)) {
+        $texto = $tp.DocumentRange.GetText($MAX_TEXTO)
+    } else {
+        $vp = $null
+        if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) { $texto = $vp.Current.Value }
+    }
+    if ($texto -and $texto.Length -gt $MAX_TEXTO) { $texto = $texto.Substring(0, $MAX_TEXTO) }
+    return $texto
+}
 
 while ($true) {
     $linea = [Console]::In.ReadLine()
@@ -118,6 +144,9 @@ while ($true) {
             }
             'restaurar' {
                 if ($null -ne $estadoPrevio) { [HablaAudio]::Silenciar($estadoPrevio); $estadoPrevio = $null }
+            }
+            'texto' {
+                $valor = Leer-TextoEnfocado
             }
             default { throw "Comando desconocido: $($peticion.cmd)" }
         }

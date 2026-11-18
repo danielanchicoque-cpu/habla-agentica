@@ -25,14 +25,15 @@ function crearPegador({ portapapeles, teclado, modificadoresPresionados, esperar
     }
   }
 
-  const pegar = (texto) => enExclusiva(() => pegarAhora(texto));
+  const pegar = (texto, opciones) => enExclusiva(() => pegarAhora(texto, opciones));
   const copiarSeleccion = () => enExclusiva(copiarAhora);
 
-  async function pegarAhora(texto) {
+  async function pegarAhora(texto, { alPegar } = {}) {
     await esperarModificadores();
     const respaldo = await portapapeles.respaldar();
     await portapapeles.escribirTexto(texto);
     teclado.tap(['ctrl', 'v']);
+    if (alPegar) alPegar();
     await esperar(RESTAURAR_MS);
     await portapapeles.restaurar(respaldo);
   }

@@ -48,7 +48,7 @@ function contarPalabras(t) {
 }
 
 function crearOrquestador(deps) {
-  const { almacen, dirAudios, generarId, ahora, secretos, sistema, pegador, pastilla, groq } = deps;
+  const { almacen, dirAudios, generarId, ahora, secretos, sistema, pegador, pastilla, groq, aprendiz } = deps;
   const oyentes = [];
   let grabacion = null; // { modo, proceso: Promise<string>, seleccion: Promise<string>|null }
   let esperandoAudio = null;
@@ -74,9 +74,10 @@ function crearOrquestador(deps) {
 
   function iniciar(modo) {
     if (grabacion) return;
+    if (aprendiz) aprendiz.cancelar(); // un dictado nuevo corta la vigilancia anterior
     const a = ajustes();
     grabacion = { modo, proceso: sistema.procesoActivo(), seleccion: null, silenciar: !!a.silenciarAudio };
-    pastilla.enviar('grabar:iniciar', { deviceId: a.micId || null, sonidos: a.sonidos !== false });
+    pastilla.enviar('grabar:iniciar', { deviceId: a.micId || null, sonidos: a.sonidos !== false, micListo: a.micListo !== false });
   }
 
   // La pastilla avisa cuando el micrófono ya está abierto y sonó el tono;
@@ -100,8 +101,11 @@ function crearOrquestador(deps) {
     // Se marca de inmediato: el audio puede llegar antes de que termine
     // la restauración del sonido.
     esperandoAudio = g;
-    pastilla.enviar('grabar:detener');
+    // Si el sistema está silenciado, el tono se toca después de restaurar
+    // el audio; si no, no se oiría.
+    pastilla.enviar('grabar:detener', { tono: !g.silenciado });
     const restaurado = sistema.restaurarAudio();
+    if (g.silenciado) restaurado.then(() => pastilla.enviar('tono', 'detener'));
     // En modo comando la selección se copia al soltar el atajo: copiarla con
     // Alt+Win presionadas mandaría otra combinación.
     if (g.modo === 'comando') {
@@ -112,12 +116,17 @@ function crearOrquestador(deps) {
     await restaurado;
   }
 
-  async function cancelar() {
-    if (grabacion) cancelada = { g: grabacion, hasta: ahora().getTime() + VENTANA_DESHACER_MS };
+  // `silencioso`: se canceló porque el atajo resultó ser otro (p. ej. Ctrl+C);
+  // no suena ni ofrece deshacer.
+  async function cancelar({ silencioso = false } = {}) {
+    const g = grabacion;
+    if (g && !silencioso) cancelada = { g, hasta: ahora().getTime() + VENTANA_DESHACER_MS };
     grabacion = null;
     esperandoAudio = null;
-    pastilla.enviar('grabar:cancelar');
+    const tonoDespues = !!(g && g.silenciado && !silencioso);
+    pastilla.enviar('grabar:cancelar', { tono: !!g && !silencioso && !tonoDespues, silencioso });
     await sistema.restaurarAudio();
+    if (tonoDespues) pastilla.enviar('tono', 'cancelar');
   }
 
   function errorGrabacion(tipo) {
@@ -160,6 +169,8 @@ function crearOrquestador(deps) {
       return;
     }
 
+    // Cuánto tarda cada etapa (ms), para saber dónde está la demora.
+    const tiempos = { voz: 0, pulido: 0, pegado: 0 };
     const a = ajustes();
     const dic = almacen.leer('diccionario', { palabras: [], snippets: [] });
     const prompts = almacen.leer('prompts', null);
@@ -169,7 +180,9 @@ function crearOrquestador(deps) {
       const key = await secretos.obtenerKey();
       if (!key) throw new ErrorGroq('key');
       t.key = key;
+      const t0 = Date.now();
       crudo = await groq.transcribir({ audio: t.audio, key, modelo: a.modeloVoz || 'whisper-large-v3', pistas: pistasWhisper(dic) });
+      tiempos.voz = Date.now() - t0;
     } catch (e) {
       const nombre = t.audioGuardado || `${t.id}.webm`;
       fs.mkdirSync(dirAudios, { recursive: true });
@@ -209,25 +222,33 @@ function crearOrquestador(deps) {
         instruccionSistema = armarSistema(prompts, promptApp);
         promptUsado = promptApp.id;
       }
+      const t1 = Date.now();
       try {
         pulido = await groq.pulir({ texto, instruccionSistema, key: t.key, modelo: a.modeloPulido || 'openai/gpt-oss-120b' });
       } catch {
         pulido = conDiccionario;
         estado = 'crudo';
       }
+      tiempos.pulido = Date.now() - t1;
     }
 
     // Se guarda antes de pegar: si el portapapeles falla, el texto no se pierde.
-    guardarEntrada({ ...base, crudo, pulido, palabras: contarPalabras(pulido), promptUsado, estado });
+    const entrada = { ...base, crudo, pulido, palabras: contarPalabras(pulido), promptUsado, estado, tiempos };
+    guardarEntrada(entrada);
     if (pegar) {
       try {
-        await pegador.pegar(pulido);
+        const t2 = Date.now();
+        // Hasta que se manda Ctrl+V; después solo se restaura el portapapeles.
+        await pegador.pegar(pulido, { alPegar: () => { tiempos.pegado = Date.now() - t2; } });
+        guardarEntrada(entrada);
       } catch (e) {
         console.error('Habla Agéntica: no se pudo pegar', e);
         emitir('error', 'No se pudo pegar, quedó en el historial');
         return;
       }
     }
+    // Vigila el campo unos segundos: si corriges una palabra, la aprende.
+    if (pegar && aprendiz && a.aprenderCorrecciones !== false) aprendiz.observar({ pulido }).catch(() => {});
     if (estado === 'crudo') emitir('aviso', 'Pegado sin pulir');
     else emitir('reposo');
   }
@@ -260,6 +281,7 @@ function crearOrquestador(deps) {
   }
 
   return {
+    avisar: (texto) => emitir('aviso', texto),
     iniciar,
     grabacionIniciada,
     manosLibres,

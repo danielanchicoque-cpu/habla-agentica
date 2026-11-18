@@ -13,11 +13,15 @@ const canales = {
   borrarHistorial: 'historial:borrar',
   pegarHistorial: 'historial:pegar',
   reintentarHistorial: 'historial:reintentar',
+  corregirHistorial: 'historial:corregir',
   estadoKey: 'key:estado',
   guardarKey: 'key:guardar',
   existeWispr: 'wispr:existe',
   importarWispr: 'wispr:importar',
   listarMics: 'mics:listar',
+  estadoActualizacion: 'actualizacion:estado',
+  buscarActualizacion: 'actualizacion:buscar',
+  instalarActualizacion: 'actualizacion:instalar',
   stats: 'stats',
   insights: 'insights',
   capturarAtajo: 'atajo:capturar',
@@ -28,5 +32,6 @@ for (const [nombre, canal] of Object.entries(canales)) {
   api[nombre] = (...args) => ipcRenderer.invoke(canal, ...args);
 }
 api.alIr = (fn) => ipcRenderer.on('panel:ir', (_e, seccion) => fn(seccion));
+api.alActualizar = (fn) => ipcRenderer.on('actualizacion:estado', (_e, estado) => fn(estado));
 
 contextBridge.exposeInMainWorld('habla', api);

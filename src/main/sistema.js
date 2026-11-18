@@ -55,11 +55,11 @@ function crearSistema({ ruta = rutaAyudante(), timeoutMs = TIMEOUT_MS, timeoutAr
     h.kill();
   }
 
-  function pedir(cmd, extra = {}) {
+  function pedir(cmd, extra = {}, esperaPropia) {
     if (!hijo) { arrancar(); recienArrancado = true; }
     const id = siguienteId++;
     return new Promise((resolver, rechazar) => {
-      const espera = recienArrancado ? timeoutArranqueMs : timeoutMs;
+      const espera = esperaPropia || (recienArrancado ? timeoutArranqueMs : timeoutMs);
       recienArrancado = false;
       const timer = setTimeout(() => {
         pendientes.delete(id);
@@ -84,6 +84,9 @@ function crearSistema({ ruta = rutaAyudante(), timeoutMs = TIMEOUT_MS, timeoutAr
     // null si no se pudo consultar (en ese caso no se corrige nada).
     teclasAbajo: (codigos) => pedir('teclas', { codigos }).then((v) => (Array.isArray(v) ? v : v == null ? [] : [v])).catch(() => null),
     restaurarAudio: () => pedir('restaurar').catch(() => {}),
+    // Texto del campo activo (UI Automation) o null. La primera vez carga las
+    // librerías y tarda más.
+    textoEnfocado: () => pedir('texto', {}, 5000).then((v) => (typeof v === 'string' && v ? v : null)).catch(() => null),
     cerrar,
     reinicios: () => reinicios,
   };

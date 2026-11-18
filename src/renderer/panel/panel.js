@@ -5,7 +5,13 @@ let contenido = document.createElement('div'); // contenedor de la sección en c
 let turnoNavegacion = 0;
 
 const TECLAS = {"1":"Esc","2":"1","3":"2","4":"3","5":"4","6":"5","7":"6","8":"7","9":"8","10":"9","11":"0","14":"Retroceso","15":"Tab","16":"Q","17":"W","18":"E","19":"R","20":"T","21":"Y","22":"U","23":"I","24":"O","25":"P","28":"Enter","29":"Ctrl izq","30":"A","31":"S","32":"D","33":"F","34":"G","35":"H","36":"J","37":"K","38":"L","42":"Shift izq","44":"Z","45":"X","46":"C","47":"V","48":"B","49":"N","50":"M","54":"Shift der","56":"Alt izq","57":"Espacio","58":"Bloq Mayús","59":"F1","60":"F2","61":"F3","62":"F4","63":"F5","64":"F6","65":"F7","66":"F8","67":"F9","68":"F10","87":"F11","88":"F12","3613":"Ctrl der","3640":"Alt der","3675":"Win izq","3676":"Win der"};
-const nombreAtajo = (codigos) => (codigos || []).map((c) => TECLAS[c] || `Tecla ${c}`).join(' + ');
+TECLAS['86'] = '< >';
+TECLAS['3666'] = 'Insert'; TECLAS['70'] = 'Bloq Despl'; TECLAS['3653'] = 'Pausa';
+// Teclas que sirven como atajo por sí solas: no escriben ni hacen nada al
+// soltarlas. No se incluyen Win (abre Inicio), Alt (activa menús), Alt der
+// (es AltGr, para @), Bloq Mayús, Shift ni Ctrl izq (se usan a cada rato).
+const TECLAS_SOLAS = new Set([3613, 3666, 70, 3653]);
+const nombreAtajo =(codigos) => (codigos || []).map((c) => TECLAS[c] || `Tecla ${c}`).join(' + ');
 
 // ---------- utilidades ----------
 function el(tag, attrs = {}, ...hijos) {
@@ -62,6 +68,38 @@ function interruptor(titulo, descripcion, valor, alCambiar) {
     el('span', { class: 'switch' }, el('input', { type: 'checkbox', role: 'switch', checked: valor, onchange: (e) => alCambiar(e.target.checked) }), el('i')));
 }
 
+// ---------- actualizaciones ----------
+let estadoActualizacion = null;
+let alCambiarActualizacion = null; // la tarjeta de Ajustes se repinta con esto
+
+function textoActualizacion(e) {
+  if (!e) return '';
+  if (e.estado === 'desarrollo') return 'Estás en modo desarrollo: aquí no se actualiza solo.';
+  if (e.estado === 'buscando') return 'Buscando actualizaciones…';
+  if (e.estado === 'descargando') return `Descargando la versión ${e.version}… ${e.progreso}%`;
+  if (e.estado === 'lista') return `La versión ${e.version} está lista para instalar.`;
+  if (e.estado === 'error') return 'No pude buscar actualizaciones ahora (¿sin internet?). Reintento más tarde.';
+  return `Tienes la última versión (${e.versionActual}).`;
+}
+
+function pintarBannerActualizacion(e) {
+  const b = document.getElementById('banner-actualizacion');
+  if (!e || (e.estado !== 'descargando' && e.estado !== 'lista')) { b.hidden = true; return; }
+  b.hidden = false;
+  poner(b, el('strong', {}, e.estado === 'lista' ? `Nueva versión ${e.version}` : 'Descargando actualización…'),
+    e.estado === 'lista'
+      ? el('button', { class: 'btn chico primario', onclick: () => api.instalarActualizacion() }, 'Reiniciar y actualizar')
+      : `${e.progreso}%`);
+}
+
+function alLlegarEstadoActualizacion(e) {
+  estadoActualizacion = e;
+  pintarBannerActualizacion(e);
+  if (alCambiarActualizacion) alCambiarActualizacion(e);
+}
+api.alActualizar(alLlegarEstadoActualizacion);
+api.estadoActualizacion().then(alLlegarEstadoActualizacion);
+
 // ---------- navegación ----------
 const secciones = { inicio: verInicio, prompts: verPrompts, diccionario: verDiccionario, historial: verHistorial, estadisticas: verEstadisticas, ajustes: verAjustes };
 let actual = null;
@@ -91,6 +129,29 @@ async function refrescarLateral() {
   chip.className = `chip-estado ${estadoKey}`;
   chip.textContent = estadoKey === 'ok' ? 'Lista para dictar' : 'Falta la key de Groq';
   document.getElementById('atajo-lateral').textContent = nombreAtajo(ajustes.atajoDictado);
+}
+
+function tarjetaActualizacion() {
+  const estado = el('p', { class: 'sub', style: 'margin:0 0 12px' });
+  const boton = el('button', { class: 'btn' }, 'Buscar actualizaciones');
+  const pintar = (e) => {
+    estado.textContent = textoActualizacion(e);
+    const lista = e && e.estado === 'lista';
+    boton.textContent = lista ? 'Reiniciar y actualizar' : 'Buscar actualizaciones';
+    boton.className = lista ? 'btn primario' : 'btn';
+    boton.disabled = !!e && (e.estado === 'buscando' || e.estado === 'descargando' || e.estado === 'desarrollo');
+  };
+  boton.addEventListener('click', async () => {
+    if (estadoActualizacion && estadoActualizacion.estado === 'lista') { api.instalarActualizacion(); return; }
+    boton.disabled = true;
+    pintar(await api.buscarActualizacion());
+  });
+  alCambiarActualizacion = pintar;
+  pintar(estadoActualizacion);
+  return el('div', { class: 'tarjeta' },
+    el('h2', {}, 'Actualizaciones'),
+    estado,
+    boton);
 }
 
 // ---------- Inicio ----------
@@ -285,7 +346,7 @@ async function verDiccionario() {
         el('div', { class: 'crece' }, campo1), el('div', { class: 'crece' }, campo2), el('button', { class: 'btn primario', type: 'submit' }, 'Agregar')),
       items.length
         ? el('div', { class: 'lista' }, items.map((x) => el('div', { class: 'renglon' },
-          el('strong', { class: 'crece' }, x.frase),
+          el('strong', { class: 'crece' }, x.frase, x.auto && el('span', { class: 'etiqueta', style: 'margin-left:8px', title: 'La app la aprendió de tus correcciones' }, 'Aprendida')),
           esPalabras
             ? (x.reemplazo ? [el('span', { class: 'flecha' }, '→'), el('span', { class: 'crece' }, x.reemplazo)] : el('span', { class: 'crece sub', style: 'margin:0' }, 'Escritura exacta'))
             : [el('span', { class: 'flecha' }, '→'), el('span', { class: 'crece', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, x.texto)],
@@ -315,8 +376,21 @@ function renglonDictado(h, conAcciones = false, alCambiar) {
   const etiquetas = { error: ['error', 'Error'], crudo: ['crudo', 'Sin pulir'], importado: ['', 'Wispr'] };
   const [claseEt, textoEt] = etiquetas[h.estado] || [];
   const crudoVisible = el('p', { class: 'crudo', hidden: true }, h.crudo || '(sin texto crudo)');
+  const campoEdicion = el('textarea', { rows: 4, style: 'width:100%;box-sizing:border-box' });
+  campoEdicion.value = h.pulido || '';
+  const editor = el('div', { hidden: true, style: 'margin-top:8px' },
+    el('p', { class: 'sub', style: 'margin:0 0 6px' }, 'Corrige el texto. Si cambias una palabra, la app la aprende para la próxima.'),
+    campoEdicion,
+    el('div', { class: 'fila', style: 'margin-top:6px;gap:6px' },
+      el('button', { class: 'btn chico primario', onclick: async () => {
+        const r = await api.corregirHistorial(h.id, campoEdicion.value);
+        if (!r.ok) { toast('El texto no puede quedar vacío', true); return; }
+        toast(r.aprendidas.length ? `Aprendí: ${r.aprendidas.join(', ')}` : 'Guardado. No encontré palabras nuevas que aprender.');
+        alCambiar && alCambiar();
+      } }, 'Guardar y aprender'),
+      el('button', { class: 'btn chico', onclick: () => { campoEdicion.value = h.pulido || ''; editor.hidden = true; } }, 'Cancelar')));
   return el('div', { class: 'dictado' },
-    el('div', { class: 'meta' }, fechaCorta(h.fecha), h.app && el('span', {}, h.app), textoEt && el('span', { class: `etiqueta ${claseEt}` }, textoEt),
+    el('div', { class: 'meta' }, fechaCorta(h.fecha), h.app && el('span', {}, h.app), h.tiempos && el('span', { title: `Voz ${h.tiempos.voz} ms · Pulido ${h.tiempos.pulido} ms · Pegar ${h.tiempos.pegado} ms` }, `⏱ ${((h.tiempos.voz + h.tiempos.pulido + h.tiempos.pegado) / 1000).toFixed(1)} s`), textoEt && el('span', { class: `etiqueta ${claseEt}` }, textoEt), h.corregido && el('span', { class: 'etiqueta' }, 'Corregido'),
       conAcciones && el('div', { class: 'acciones', style: 'margin-left:auto;display:flex;gap:6px' },
         h.estado === 'error'
           ? el('button', { class: 'btn chico primario', onclick: async (e) => {
@@ -328,11 +402,12 @@ function renglonDictado(h, conAcciones = false, alCambiar) {
           : [
             el('button', { class: 'btn chico', onclick: () => { navigator.clipboard.writeText(h.pulido); toast('Copiado ✓'); } }, 'Copiar'),
             el('button', { class: 'btn chico', onclick: () => api.pegarHistorial(h.id) }, 'Pegar'),
+            el('button', { class: 'btn chico', title: 'Corrige el texto y la app aprende las palabras', onclick: () => { editor.hidden = !editor.hidden; if (!editor.hidden) campoEdicion.focus(); } }, 'Corregir'),
             el('button', { class: 'btn chico', onclick: () => { crudoVisible.hidden = !crudoVisible.hidden; } }, 'Ver crudo'),
           ],
         el('button', { class: 'btn chico peligro', onclick: async () => { await api.borrarHistorial(h.id); alCambiar(); } }, 'Borrar'))),
     el('p', {}, h.pulido || (h.estado === 'error' ? 'El audio quedó guardado. Dale "Reintentar".' : '')),
-    crudoVisible);
+    crudoVisible, editor);
 }
 
 async function verHistorial() {
@@ -464,7 +539,12 @@ async function verAjustes() {
       const teclas = await api.capturarAtajo();
       boton.textContent = 'Cambiar'; boton.disabled = false;
       if (!teclas) return;
-      if (teclas.length < 2) { toast('Usa al menos dos teclas a la vez', true); return; }
+      if (teclas.length === 1 && !TECLAS_SOLAS.has(teclas[0])) {
+        toast(teclas[0] === 86
+          ? 'La tecla < > sola escribiría "<". Úsala con otra tecla o prueba Ctrl der. (Fn no la ve Windows)'
+          : 'Esa tecla sola estorbaría al escribir. Úsala con otra tecla o elige Ctrl der, Insert o Bloq Despl.', true);
+        return;
+      }
       await guardar({ [clave]: teclas });
       kbd.textContent = nombreAtajo(teclas);
     } }, 'Cambiar');
@@ -507,6 +587,8 @@ async function verAjustes() {
     el('div', { class: 'tarjeta' },
       el('h2', {}, 'Comportamiento'),
       interruptor('Silenciar el audio mientras dictas', 'Pausa la música o videos para que no se cuelen.', ajustes.silenciarAudio, (v) => guardar({ silenciarAudio: v })),
+      interruptor('Micrófono siempre listo', 'El dictado empieza al instante. El micrófono queda abierto (Windows muestra su ícono), pero solo se graba mientras usas el atajo. Si usas audífonos Bluetooth, apágalo: con el micrófono abierto suenan peor.', ajustes.micListo !== false, (v) => guardar({ micListo: v })),
+      interruptor('Aprender de mis correcciones', 'Si corriges una palabra después de que la app pega, la aprende y la agrega al diccionario. Para esto lee el texto del campo donde pegó durante un minuto; no guarda ni envía ese texto a ninguna parte, y no mira campos de contraseña.', ajustes.aprenderCorrecciones !== false, (v) => guardar({ aprenderCorrecciones: v })),
       interruptor('Sonidos al empezar y terminar', null, ajustes.sonidos, (v) => guardar({ sonidos: v })),
       interruptor('Abrir al iniciar Windows', 'Queda en la bandeja, junto a la hora.', ajustes.abrirAlIniciar, (v) => guardar({ abrirAlIniciar: v }))),
     el('div', { class: 'tarjeta' },
@@ -515,6 +597,7 @@ async function verAjustes() {
         ['whisper-large-v3', 'Whisper Large v3 (más preciso, recomendado)'], ['whisper-large-v3-turbo', 'Whisper Turbo (más rápido, menos preciso)']])),
       el('label', { class: 'campo', style: 'margin:0' }, el('span', {}, 'Pulido'), selModelo('modeloPulido', [
         ['openai/gpt-oss-120b', 'GPT-OSS 120B (recomendado)'], ['openai/gpt-oss-20b', 'GPT-OSS 20B (más rápido)']]))),
+    tarjetaActualizacion(),
     el('div', { class: 'tarjeta' },
       el('h2', {}, 'Importar desde Wispr Flow'),
       el('p', { class: 'sub', style: 'margin:0 0 12px' }, hayWispr

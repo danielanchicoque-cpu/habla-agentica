@@ -161,42 +161,87 @@ async function listarMics() {
     .map((d) => ({ deviceId: d.deviceId, label: d.label || 'Micrófono' }));
 }
 
-async function iniciar({ deviceId, sonidos: conSonidos }) {
+// Micrófono abierto y listo (sin grabar). Abrirlo en cada dictado tarda
+// medio segundo o más; con `micListo` se deja abierto entre dictados y el
+// inicio es instantáneo. Solo se graba mientras el MediaRecorder corre.
+let mic = null; // { stream, deviceId, audioCtx, analizador }
+let micListo = true;
+
+function micVivo(deviceId) {
+  return mic && mic.deviceId === (deviceId || null)
+    && mic.stream.getAudioTracks().some((t) => t.readyState === 'live');
+}
+
+async function abrirMic(deviceId) {
+  if (micVivo(deviceId)) return mic;
+  cerrarMic();
+  if (deviceId) {
+    const mics = await listarMics();
+    if (!mics.some((m) => m.deviceId === deviceId)) {
+      const e = new Error('mic-no-encontrado'); e.name = 'NotFoundError'; throw e;
+    }
+  }
+  const audio = { echoCancellation: false, noiseSuppression: true, autoGainControl: true };
+  if (deviceId) audio.deviceId = { exact: deviceId };
+  const stream = await navigator.mediaDevices.getUserMedia({ audio });
+  const audioCtx = new AudioContext();
+  const analizador = audioCtx.createAnalyser();
+  analizador.fftSize = 256;
+  analizador.minDecibels = -85;
+  analizador.maxDecibels = -25;
+  analizador.smoothingTimeConstant = 0.6;
+  audioCtx.createMediaStreamSource(stream).connect(analizador);
+  mic = { stream, deviceId: deviceId || null, audioCtx, analizador };
+  return mic;
+}
+
+function cerrarMic() {
+  if (!mic) return;
+  mic.stream.getTracks().forEach((t) => t.stop());
+  mic.audioCtx.close().catch(() => {});
+  mic = null;
+}
+
+// Main pide dejar el micrófono listo al arrancar y cuando cambian los ajustes.
+async function preparar({ deviceId, micListo: listo }) {
+  micListo = listo !== false;
+  if (grabacion || arrancando) return;
+  if (!micListo) { cerrarMic(); return; }
+  try { await abrirMic(deviceId); } catch { /* se reintenta al dictar */ }
+}
+
+// Si se conecta o desconecta un micrófono, se reabre (el "predeterminado"
+// de Windows pudo cambiar).
+navigator.mediaDevices.addEventListener('devicechange', () => {
+  if (!mic || grabacion || arrancando) return;
+  const id = mic.deviceId;
+  cerrarMic();
+  if (micListo) abrirMic(id).catch(() => {});
+});
+
+async function iniciar({ deviceId, sonidos: conSonidos, micListo: listo }) {
   if (grabacion || arrancando) return;
   arrancando = true;
   terminarPendiente = null;
   cancelacion = null;
   sonidos = conSonidos !== false;
+  if (listo !== undefined) micListo = listo !== false;
   try {
-    if (deviceId) {
-      const mics = await listarMics();
-      if (!mics.some((m) => m.deviceId === deviceId)) {
-        window.pastilla.enviar('grabar:error', 'mic-no-encontrado');
-        return;
-      }
-    }
-    const audio = { echoCancellation: false, noiseSuppression: true, autoGainControl: true };
-    if (deviceId) audio.deviceId = { exact: deviceId };
-    const stream = await navigator.mediaDevices.getUserMedia({ audio });
-    const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 });
-    const audioCtx = new AudioContext();
-    const analizador = audioCtx.createAnalyser();
-    analizador.fftSize = 256;
-    analizador.minDecibels = -85;
-    analizador.maxDecibels = -25;
-    analizador.smoothingTimeConstant = 0.6;
-    audioCtx.createMediaStreamSource(stream).connect(analizador);
-    const g = { stream, recorder, trozos: [], inicio: performance.now(), audioCtx, analizador, cancelada: false, nivelMax: 0 };
+    const m = await abrirMic(deviceId);
+    if (m.audioCtx.state === 'suspended') m.audioCtx.resume();
+    const recorder = new MediaRecorder(m.stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 });
+    const g = { stream: m.stream, recorder, trozos: [], inicio: performance.now(), audioCtx: m.audioCtx, analizador: m.analizador, cancelada: false, nivelMax: 0 };
     grabacion = g;
     recorder.ondataavailable = (e) => { if (e.data.size) g.trozos.push(e.data); };
     recorder.start(1000);
     ponerEstado('grabando');
-    tono(660);
+    tono(TONOS.iniciar);
     // Main silencia el sistema poco después de este aviso, cuando ya sonó el tono.
     window.pastilla.enviar('grabar:iniciada');
   } catch (e) {
     terminarPendiente = null;
     grabacion = null;
+    cerrarMic();
     const tipo = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'permiso'
       : e && (e.name === 'NotFoundError' || e.name === 'OverconstrainedError') ? 'mic-no-encontrado' : 'otro';
     window.pastilla.enviar('grabar:error', tipo);
@@ -206,20 +251,24 @@ async function iniciar({ deviceId, sonidos: conSonidos }) {
   }
 }
 
-function terminar(cancelar) {
+const TONOS = { iniciar: 660, detener: 440, cancelar: [520, 330] };
+
+// `tono`: tocarlo ya (main lo pide después si el sistema estaba silenciado).
+// `silencioso`: cancelación sin aviso ni Deshacer.
+function terminar(cancelar, { tono: conTono = true, silencioso = false } = {}) {
   if (arrancando) { terminarPendiente = terminarPendiente === true ? true : cancelar; return; }
   const g = grabacion;
   if (!g) return;
+  if (conTono) tono(cancelar ? TONOS.cancelar : TONOS.detener);
   grabacion = null;
   g.cancelada = cancelar;
   g.recorder.onstop = async () => {
-    g.stream.getTracks().forEach((t) => t.stop());
-    g.audioCtx.close();
+    if (!micListo) cerrarMic();
     const duracionSeg = (performance.now() - g.inicio) / 1000;
     const blob = new Blob(g.trozos, { type: 'audio/webm' });
     if (g.cancelada) {
       // Un toque accidental no muestra aviso; una grabación real se puede deshacer.
-      if (duracionSeg < MIN_SEG_PARA_DESHACER) { ponerEstado('reposo'); return; }
+      if (silencioso || duracionSeg < MIN_SEG_PARA_DESHACER) { ponerEstado('reposo'); return; }
       cancelacion = { audio: await blob.arrayBuffer(), duracionSeg, nivelMax: g.nivelMax };
       ponerEstado('cancelado', 'Transcripción cancelada');
       return;
@@ -227,7 +276,7 @@ function terminar(cancelar) {
     window.pastilla.enviar('grabar:audio', await blob.arrayBuffer(), duracionSeg, g.nivelMax);
   };
   g.recorder.stop();
-  if (!cancelar) { tono(440); ponerEstado('procesando'); }
+  if (!cancelar) ponerEstado('procesando');
 }
 
 // ---------- botones ----------
@@ -270,8 +319,10 @@ window.addEventListener('mouseup', () => {
 
 // ---------- mensajes de main ----------
 window.pastilla.on('grabar:iniciar', (opciones) => iniciar(opciones || {}));
-window.pastilla.on('grabar:detener', () => terminar(false));
-window.pastilla.on('grabar:cancelar', () => terminar(true));
+window.pastilla.on('grabar:detener', (op) => terminar(false, op || {}));
+window.pastilla.on('grabar:cancelar', (op) => terminar(true, op || {}));
+window.pastilla.on('grabar:preparar', (op) => preparar(op || {}));
+window.pastilla.on('tono', (nombre) => TONOS[nombre] && tono(TONOS[nombre]));
 window.pastilla.on('grabar:manos-libres', () => tono([660, 880]));
 window.pastilla.on('estado', (estado, texto) => {
   // Un aviso de main no debe tapar el "Transcripción cancelada" con su Deshacer.

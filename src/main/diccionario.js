@@ -37,8 +37,13 @@ function aplicarDiccionario(texto, dic) {
 
 function pistasWhisper(dic) {
   let salida = '';
+  const vistas = new Set();
   for (const p of dic.palabras || []) {
-    const siguiente = salida ? `${salida}, ${p.frase}` : p.frase;
+    // La pista es cómo debe quedar escrito: el reemplazo si lo hay.
+    const termino = p.reemplazo || p.frase;
+    if (vistas.has(termino)) continue;
+    vistas.add(termino);
+    const siguiente = salida ? `${salida}, ${termino}` : termino;
     if (siguiente.length > 800) break;
     salida = siguiente;
   }

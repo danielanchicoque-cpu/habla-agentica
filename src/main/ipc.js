@@ -5,7 +5,7 @@ const { importarWispr, rutaWisprPorDefecto } = require('./importadorWispr');
 const { buscarHistorial, mezclarImportacion, calcularStats, calcularInsights } = require('./logicaPanel');
 
 function registrar(ctx) {
-  const { almacen, secretos, orquestador, pegador, groq, teclado, reconstruirAtajos, pastilla, AJUSTES_POR_DEFECTO } = ctx;
+  const { actualizador, versionApp, almacen, secretos, orquestador, pegador, groq, teclado, reconstruirAtajos, pastilla, prepararMic, aprendiz, AJUSTES_POR_DEFECTO } = ctx;
   const h = (canal, fn) => ipcMain.handle(canal, (_e, ...args) => fn(...args));
   const ajustes = () => ({ ...AJUSTES_POR_DEFECTO, ...almacen.leer('ajustes', {}) });
 
@@ -18,6 +18,7 @@ function registrar(ctx) {
     const nuevo = { ...almacen.leer('ajustes', {}), ...limpio };
     almacen.escribir('ajustes', nuevo);
     if ('atajoDictado' in limpio || 'atajoComando' in limpio) reconstruirAtajos();
+    if (('micId' in limpio || 'micListo' in limpio) && prepararMic) prepararMic();
     if ('abrirAlIniciar' in limpio && require('electron').app.isPackaged) {
       require('electron').app.setLoginItemSettings({ openAtLogin: !!limpio.abrirAlIniciar });
     }
@@ -69,6 +70,26 @@ function registrar(ctx) {
     return true;
   });
   h('historial:reintentar', (id) => orquestador.reintentar(id));
+  // El usuario corrige un dictado a mano: se guarda y la app aprende de la diferencia.
+  h('historial:corregir', (id, texto) => {
+    const nuevo = (texto || '').trim();
+    const historial = almacen.leer('historial', []);
+    const entrada = historial.find((x) => x.id === id);
+    if (!entrada || !nuevo) return { ok: false, aprendidas: [] };
+    const antes = entrada.pulido || '';
+    entrada.pulido = nuevo;
+    entrada.palabras = (nuevo.match(/\S+/g) || []).length;
+    entrada.corregido = true;
+    almacen.escribir('historial', historial);
+    const aprendidas = aprendiz ? aprendiz.aprenderDe(antes, nuevo, antes, { explicito: true, silencioso: true }) : [];
+    return { ok: true, aprendidas };
+  });
+
+  // Actualizaciones: en desarrollo no hay actualizador y se informa como tal.
+  const sinActualizador = () => ({ estado: 'desarrollo', versionActual: versionApp, version: null, progreso: 0, error: null });
+  h('actualizacion:estado', () => (actualizador ? actualizador.estado() : sinActualizador()));
+  h('actualizacion:buscar', () => (actualizador ? actualizador.buscar() : sinActualizador()));
+  h('actualizacion:instalar', () => (actualizador ? actualizador.instalar() : false));
 
   h('key:estado', async () => ((await secretos.obtenerKey()) ? 'ok' : 'falta'));
   h('key:guardar', async (k) => {

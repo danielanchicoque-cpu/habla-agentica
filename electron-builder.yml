@@ -13,6 +13,11 @@ files:
 asarUnpack:
   - node_modules/uiohook-napi/**
   - src/main/ayudante.ps1
+# De aquí lee la app instalada para buscar versiones nuevas (versiones de GitHub).
+publish:
+  provider: github
+  owner: danielanchicoque-cpu
+  repo: habla-agentica
 win:
   target:
     - target: nsis

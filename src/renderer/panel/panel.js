@@ -104,7 +104,7 @@ api.estadoActualizacion().then(alLlegarEstadoActualizacion);
 const secciones = { inicio: verInicio, prompts: verPrompts, diccionario: verDiccionario, historial: verHistorial, estadisticas: verEstadisticas, ajustes: verAjustes };
 let actual = null;
 
-async function ir(seccion) {
+async function irAhora(seccion) {
   if (!secciones[seccion]) seccion = 'inicio';
   actual = seccion;
   document.querySelectorAll('nav button').forEach((b) => {
@@ -120,14 +120,25 @@ async function ir(seccion) {
   principal.scrollTop = 0;
 }
 
+// Las secciones se arman en una sola variable compartida (`contenido`): si dos
+// navegaciones corrieran a la vez, se mezclarían y la pantalla saldría doble.
+// Por eso se hacen una tras otra.
+let colaNavegacion = Promise.resolve();
+function ir(seccion) {
+  colaNavegacion = colaNavegacion.then(() => irAhora(seccion)).catch((e) => console.error('No se pudo abrir la sección', e));
+  return colaNavegacion;
+}
+
 document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => ir(b.dataset.seccion)));
 api.alIr((s) => ir(s));
 
 async function refrescarLateral() {
-  const [estadoKey, ajustes] = await Promise.all([api.estadoKey(), api.leerAjustes()]);
+  const [estadoKey, ajustes, local] = await Promise.all([api.estadoKey(), api.leerAjustes(), api.estadoLocal()]);
   const chip = document.getElementById('estado-key');
-  chip.className = `chip-estado ${estadoKey}`;
-  chip.textContent = estadoKey === 'ok' ? 'Lista para dictar' : 'Falta la key de Groq';
+  // En modo local la transcripción no necesita la key de Groq.
+  const soloLocal = ajustes.motorVoz === 'local' && local.instalado;
+  chip.className = `chip-estado ${estadoKey === 'ok' || soloLocal ? 'ok' : estadoKey}`;
+  chip.textContent = estadoKey === 'ok' || soloLocal ? 'Lista para dictar' : 'Falta la key de Groq';
   document.getElementById('atajo-lateral').textContent = nombreAtajo(ajustes.atajoDictado);
 }
 
@@ -152,6 +163,98 @@ function tarjetaActualizacion() {
     el('h2', {}, 'Actualizaciones'),
     estado,
     boton);
+}
+
+// ---------- transcripción y modo local ----------
+const tamanoLegible = (mb) => (mb >= 1000 ? `${(mb / 1000).toFixed(1).replace('.', ',')} GB` : `${mb} MB`);
+let estadoLocal = null;
+let alCambiarLocal = null;
+let paqueteElegido = null;
+api.alCambiarLocal((e) => {
+  // Los eventos de avance no traen paquetes ni hardware: se conservan los últimos.
+  estadoLocal = { ...(estadoLocal || {}), ...e };
+  if (alCambiarLocal) alCambiarLocal(estadoLocal);
+  if (!e.instalando) refrescarLateral(); // el chip de la barra lateral depende de si el modo local está instalado
+});
+
+const DESCRIPCION_MOTOR = {
+  nube: 'El audio se envía a Groq, que lo transcribe muy rápido. Necesita internet y tu key de Groq.',
+  local: 'El audio se transcribe en este computador y no sale de él. Funciona sin internet.',
+  auto: 'Usa Groq y, si no hay internet o Groq falla, transcribe en este computador.',
+};
+
+function tarjetaTranscripcion(ajustes, guardar) {
+  const descripcion = el('p', { class: 'sub', style: 'margin:0 0 12px' });
+  const aviso = el('p', { style: 'color:var(--error);margin:0 0 12px', hidden: true });
+  const selector = el('select', { onchange: (e) => { guardar({ motorVoz: e.target.value }); pintar(); } },
+    el('option', { value: 'nube' }, 'En la nube (Groq)'),
+    el('option', { value: 'local' }, 'En este computador (modo local)'),
+    el('option', { value: 'auto' }, 'Automático: nube y, sin internet, local'));
+  selector.value = ajustes.motorVoz || 'nube';
+  function pintar() {
+    descripcion.textContent = DESCRIPCION_MOTOR[selector.value];
+    const sinInstalar = selector.value !== 'nube' && estadoLocal && !estadoLocal.instalado;
+    aviso.hidden = !sinInstalar;
+    aviso.textContent = 'El modo local todavía no está instalado: instálalo en la tarjeta de abajo.';
+  }
+  const previo = alCambiarLocal;
+  alCambiarLocal = (e) => { if (previo) previo(e); pintar(); };
+  pintar();
+  return el('div', { class: 'tarjeta' },
+    el('h2', {}, 'Transcripción'),
+    descripcion,
+    el('label', { class: 'campo' }, el('span', {}, 'Dónde se transcribe tu voz'), selector),
+    aviso,
+    el('div', { style: 'margin-top:4px' }, interruptor('Pulir el texto con la IA de Groq',
+      'Manda solo el texto (nunca el audio) para quitar muletillas y armar listas y párrafos. Si lo apagas, o no tienes key, el texto se pega tal como sale de la transcripción.',
+      ajustes.pulirEnNube !== false, (v) => guardar({ pulirEnNube: v }))));
+}
+
+function tarjetaModoLocal() {
+  const cuerpo = el('div');
+  function pintar() {
+    const e = estadoLocal;
+    if (!e) { poner(cuerpo, el('p', { class: 'sub' }, 'Cargando…')); return; }
+    const partes = [];
+    if (e.instalando) {
+      const etapas = { motor: 'Descargando el motor', modelo: 'Descargando el modelo de voz', extrayendo: 'Preparando los archivos' };
+      const pct = Math.round((e.progreso || 0) * 100);
+      partes.push(
+        el('p', { class: 'sub', style: 'margin:0 0 8px' }, `${etapas[e.etapa] || 'Instalando'}… ${pct}%`),
+        el('div', { class: 'barra-progreso' }, el('i', { style: `width:${pct}%` })),
+        el('div', { class: 'fila', style: 'margin-top:12px' }, el('button', { class: 'btn chico', onclick: () => api.cancelarLocal() }, 'Cancelar')));
+    } else if (e.instalado) {
+      partes.push(
+        el('p', { class: 'sub', style: 'margin:0 0 12px' }, `Instalado: ${e.nombre}. ${e.listo ? 'El motor está activo y listo.' : 'Se activa cuando lo usas.'}`),
+        el('div', { class: 'fila' }, el('button', { class: 'btn chico peligro', onclick: async () => {
+          if (!window.confirm('¿Quitar el modo local? Se borran el motor y el modelo de voz (puedes volver a instalarlos).')) return;
+          estadoLocal = { ...estadoLocal, ...(await api.quitarLocal()) };
+          pintar();
+        } }, 'Quitar modo local')));
+    } else {
+      const recomendado = e.hardware && e.hardware.nvidia && e.hardware.vramMB >= 4000 ? 'cuda' : 'cpu';
+      if (!paqueteElegido) paqueteElegido = recomendado;
+      partes.push(
+        el('p', { class: 'sub', style: 'margin:0 0 12px' }, e.hardware && e.hardware.nvidia
+          ? `Detecté tu tarjeta ${e.hardware.gpu}.`
+          : 'No detecté una tarjeta NVIDIA; el paquete ligero funciona en cualquier computador.'),
+        ...e.paquetes.map((p) => el('label', { class: 'opcion-paquete' },
+          el('input', { type: 'radio', name: 'paquete-local', value: p.id, checked: p.id === paqueteElegido, onchange: () => { paqueteElegido = p.id; } }),
+          el('span', {}, el('strong', {}, `${p.nombre} · ${tamanoLegible(p.megas)}`, p.id === recomendado && el('span', { class: 'etiqueta', style: 'margin-left:8px' }, 'Recomendado')),
+            el('small', {}, p.detalle)))),
+        el('div', { class: 'fila', style: 'margin-top:12px' }, el('button', { class: 'btn primario', onclick: async () => {
+          estadoLocal = { ...estadoLocal, ...(await api.instalarLocal(paqueteElegido)) };
+          pintar();
+        } }, 'Instalar modo local')),
+        el('p', { class: 'sub', style: 'margin:10px 0 0;font-size:12px' }, 'Se descargan de GitHub y Hugging Face y se verifican con una huella antes de usarse. Necesita Microsoft Visual C++ Redistributable (casi todos los Windows ya lo tienen).'));
+    }
+    if (e.error) partes.push(el('p', { style: 'color:var(--error);margin:12px 0 0' }, e.error));
+    poner(cuerpo, ...partes);
+  }
+  const previo = alCambiarLocal;
+  alCambiarLocal = (e) => { if (previo) previo(e); pintar(); };
+  pintar();
+  return el('div', { class: 'tarjeta' }, el('h2', {}, 'Modo local'), cuerpo);
 }
 
 // ---------- Inicio ----------
@@ -390,7 +493,7 @@ function renglonDictado(h, conAcciones = false, alCambiar) {
       } }, 'Guardar y aprender'),
       el('button', { class: 'btn chico', onclick: () => { campoEdicion.value = h.pulido || ''; editor.hidden = true; } }, 'Cancelar')));
   return el('div', { class: 'dictado' },
-    el('div', { class: 'meta' }, fechaCorta(h.fecha), h.app && el('span', {}, h.app), h.tiempos && el('span', { title: `Voz ${h.tiempos.voz} ms · Pulido ${h.tiempos.pulido} ms · Pegar ${h.tiempos.pegado} ms` }, `⏱ ${((h.tiempos.voz + h.tiempos.pulido + h.tiempos.pegado) / 1000).toFixed(1)} s`), textoEt && el('span', { class: `etiqueta ${claseEt}` }, textoEt), h.corregido && el('span', { class: 'etiqueta' }, 'Corregido'),
+    el('div', { class: 'meta' }, fechaCorta(h.fecha), h.app && el('span', {}, h.app), h.tiempos && el('span', { title: `Voz ${h.tiempos.voz} ms · Pulido ${h.tiempos.pulido} ms · Pegar ${h.tiempos.pegado} ms` }, `⏱ ${((h.tiempos.voz + h.tiempos.pulido + h.tiempos.pegado) / 1000).toFixed(1)} s`), textoEt && el('span', { class: `etiqueta ${claseEt}` }, textoEt), h.motor === 'local' && el('span', { class: 'etiqueta', title: 'Transcrito en tu computador' }, 'Local'), h.corregido && el('span', { class: 'etiqueta' }, 'Corregido'),
       conAcciones && el('div', { class: 'acciones', style: 'margin-left:auto;display:flex;gap:6px' },
         h.estado === 'error'
           ? el('button', { class: 'btn chico primario', onclick: async (e) => {
@@ -510,6 +613,9 @@ async function verEstadisticas() {
 
 // ---------- Ajustes ----------
 async function verAjustes() {
+  alCambiarLocal = null; // las tarjetas de esta pantalla se vuelven a enganchar
+  paqueteElegido = null;
+  estadoLocal = await api.estadoLocal();
   const [ajustes, estadoKey, mics, hayWispr] = await Promise.all([api.leerAjustes(), api.estadoKey(), api.listarMics(), api.existeWispr()]);
   const guardar = async (parcial) => { Object.assign(ajustes, parcial); await api.guardarAjustes(parcial); toast('Guardado ✓'); refrescarLateral(); };
 
@@ -517,7 +623,7 @@ async function verAjustes() {
   const campoKey = el('input', { type: 'password', placeholder: estadoKey === 'ok' ? '•••••••••••• (guardada)' : 'gsk_…', autocomplete: 'off' });
   const tarjetaKey = el('div', { class: `tarjeta${estadoKey === 'ok' ? '' : ' destacada'}` },
     el('h2', {}, 'Key de Groq'),
-    el('p', { class: 'sub', style: 'margin:0 0 12px' }, estadoKey === 'ok' ? 'Guardada y cifrada en este computador.' : 'Hace falta para transcribir. Créala gratis en console.groq.com → API Keys.'),
+    el('p', { class: 'sub', style: 'margin:0 0 12px' }, estadoKey === 'ok' ? 'Guardada y cifrada en este computador.' : 'Hace falta para transcribir en la nube y para pulir el texto (con el modo local solo sirve para pulir). Créala gratis en console.groq.com → API Keys.'),
     el('form', { class: 'fila', onsubmit: async (e) => {
       e.preventDefault();
       const r = await api.guardarKey(campoKey.value);
@@ -597,6 +703,8 @@ async function verAjustes() {
         ['whisper-large-v3', 'Whisper Large v3 (más preciso, recomendado)'], ['whisper-large-v3-turbo', 'Whisper Turbo (más rápido, menos preciso)']])),
       el('label', { class: 'campo', style: 'margin:0' }, el('span', {}, 'Pulido'), selModelo('modeloPulido', [
         ['openai/gpt-oss-120b', 'GPT-OSS 120B (recomendado)'], ['openai/gpt-oss-20b', 'GPT-OSS 20B (más rápido)']]))),
+    tarjetaTranscripcion(ajustes, guardar),
+    tarjetaModoLocal(),
     tarjetaActualizacion(),
     el('div', { class: 'tarjeta' },
       el('h2', {}, 'Importar desde Wispr Flow'),

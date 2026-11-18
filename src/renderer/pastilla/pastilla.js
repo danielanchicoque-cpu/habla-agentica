@@ -330,3 +330,12 @@ window.pastilla.on('estado', (estado, texto) => {
   ponerEstado(estado, texto);
 });
 window.pastilla.on('mics:pedir', async () => window.pastilla.enviar('mics:lista', await listarMics()));
+// Main pide pasar un audio a WAV 16 kHz para el motor local.
+window.pastilla.on('audio:wav', async (id, datos) => {
+  try {
+    const copia = datos.buffer ? datos.buffer.slice(datos.byteOffset, datos.byteOffset + datos.byteLength) : datos;
+    window.pastilla.enviar('audio:wav-listo', id, await aWav16k(copia), null);
+  } catch (e) {
+    window.pastilla.enviar('audio:wav-listo', id, null, String((e && e.message) || e));
+  }
+});

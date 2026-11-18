@@ -22,6 +22,10 @@ const canales = {
   estadoActualizacion: 'actualizacion:estado',
   buscarActualizacion: 'actualizacion:buscar',
   instalarActualizacion: 'actualizacion:instalar',
+  estadoLocal: 'local:estado',
+  instalarLocal: 'local:instalar',
+  cancelarLocal: 'local:cancelar',
+  quitarLocal: 'local:quitar',
   stats: 'stats',
   insights: 'insights',
   capturarAtajo: 'atajo:capturar',
@@ -33,5 +37,6 @@ for (const [nombre, canal] of Object.entries(canales)) {
 }
 api.alIr = (fn) => ipcRenderer.on('panel:ir', (_e, seccion) => fn(seccion));
 api.alActualizar = (fn) => ipcRenderer.on('actualizacion:estado', (_e, estado) => fn(estado));
+api.alCambiarLocal = (fn) => ipcRenderer.on('local:estado', (_e, estado) => fn(estado));
 
 contextBridge.exposeInMainWorld('habla', api);

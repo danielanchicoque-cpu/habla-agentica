@@ -220,3 +220,10 @@ h2.grande { font-size: 20px; }
 .banner-actualizacion { margin: 0 6px 10px; padding: 10px 12px; border-radius: 10px; background: rgba(139, 92, 246, .14); border: 1px solid rgba(139, 92, 246, .4); font-size: 12px; line-height: 1.4; }
 .banner-actualizacion strong { display: block; margin-bottom: 6px; }
 .banner-actualizacion[hidden] { display: none; }
+
+.barra-progreso { height: 8px; border-radius: 999px; background: var(--tarjeta-2); overflow: hidden; }
+.barra-progreso > i { display: block; height: 100%; background: var(--primario-hover); transition: width .3s; }
+.opcion-paquete { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--borde); border-radius: 10px; margin-bottom: 8px; cursor: pointer; }
+.opcion-paquete small { display: block; color: var(--tenue); margin-top: 2px; }
+.opcion-paquete input { accent-color: var(--primario-hover); margin-top: 3px; }
+.opcion-paquete:has(input:checked) { border-color: var(--primario); background: rgba(124, 58, 237, .08); }

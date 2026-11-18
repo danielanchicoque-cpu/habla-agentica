@@ -16,6 +16,7 @@ const { crearSecretos, leerDpapiGroq } = require('./secretos');
 const { crearOrquestador } = require('./orquestador');
 const { crearAprendiz } = require('./aprendizaje');
 const { crearActualizador } = require('./actualizador');
+const { crearMotorLocal } = require('./motorLocal');
 const { posicionPastilla, cursorSobrePastilla } = require('./posicionPastilla');
 const groq = require('./groq');
 
@@ -24,6 +25,8 @@ const AJUSTES_POR_DEFECTO = {
   sonidos: true,
   micListo: true, // micrófono abierto entre dictados: el inicio es instantáneo
   aprenderCorrecciones: true, // aprende palabras que corriges después de pegar
+  motorVoz: 'nube', // dónde se transcribe: nube (Groq), local o auto
+  pulirEnNube: true, // pulir el texto con la IA de Groq (solo texto, nunca audio)
   silenciarAudio: true,
   abrirAlIniciar: true,
   modeloVoz: 'whisper-large-v3',
@@ -47,6 +50,7 @@ let panel = null;
 let tray = null;
 let teclado = null;
 let sistema = null;
+let motorLocal = null;
 const detectores = [];
 
 if (!app.requestSingleInstanceLock()) {
@@ -273,6 +277,37 @@ async function arrancar() {
   const pegador = crearPegador({ portapapeles, teclado: tecladoUiohook(), modificadoresPresionados: () => modificadores(), esperar, grabando: () => hayGrabacion() });
 
   crearPastilla(almacen);
+  // Modo local: motor de transcripción (whisper.cpp) que descarga y corre la app.
+  motorLocal = crearMotorLocal({
+    dir: path.join(dirDatos, 'motor-local'),
+    alCambiar: (estado) => { if (panel && !panel.isDestroyed()) panel.webContents.send('local:estado', estado); },
+  });
+  // Pasa un audio a WAV de 16 kHz con el decodificador de la pastilla.
+  const wavPendientes = new Map();
+  let siguienteWav = 1;
+  ipcMain.on('audio:wav-listo', (_e, id, wav, fallo) => {
+    const p = wavPendientes.get(id);
+    if (!p) return;
+    wavPendientes.delete(id);
+    clearTimeout(p.timer);
+    if (fallo || !wav) p.rechazar(new Error(fallo || 'sin datos')); else p.resolver(Buffer.from(wav));
+  });
+  const aWav = (audio) => new Promise((resolver, rechazar) => {
+    const id = siguienteWav++;
+    const timer = setTimeout(() => { wavPendientes.delete(id); rechazar(new Error('la conversión tardó demasiado')); }, 20000);
+    wavPendientes.set(id, { resolver, rechazar, timer });
+    pastilla.webContents.send('audio:wav', id, audio);
+  });
+  // Deja el motor local arrancado si se usa (el primer arranque tarda unos segundos).
+  const aplicarMotor = () => {
+    const ajustesActuales = { ...AJUSTES_POR_DEFECTO, ...almacen.leer('ajustes', {}) };
+    if (ajustesActuales.motorVoz !== 'nube' && motorLocal.instalado()) {
+      motorLocal.iniciar().catch((e) => console.error('Habla Agéntica: motor local', e.message));
+    } else {
+      motorLocal.detener();
+    }
+  };
+
   const aprendiz = crearAprendiz({
     sistema,
     almacen,
@@ -285,6 +320,8 @@ async function arrancar() {
   const orquestador = crearOrquestador({
     almacen,
     aprendiz,
+    motorLocal,
+    aWav,
     dirAudios: path.join(dirDatos, 'audios'),
     generarId: () => crypto.randomUUID(),
     ahora: () => new Date(),
@@ -298,6 +335,7 @@ async function arrancar() {
     pastilla.webContents.send('estado', estado, texto);
     if (estado === 'error' && texto === 'Revisa tu key de Groq') abrirPanel('ajustes');
     if (estado === 'error' && texto === 'Micrófono no encontrado') abrirPanel('ajustes');
+    if (estado === 'error' && (texto === 'Instala el modo local en Ajustes' || texto === 'El motor local no pudo arrancar')) abrirPanel('ajustes');
   });
   hayGrabacion = () => orquestador.grabando();
   orquestador.limpiarAudiosViejos();
@@ -385,10 +423,12 @@ async function arrancar() {
   }
 
   try {
-    require('./ipc').registrar({ actualizador, versionApp: app.getVersion(), almacen, secretos, orquestador, pegador, groq, teclado, reconstruirAtajos, abrirPanel, pastilla: () => pastilla, prepararMic: () => prepararMic(almacen), aprendiz, AJUSTES_POR_DEFECTO });
+    require('./ipc').registrar({ motorLocal, aplicarMotor, actualizador, versionApp: app.getVersion(), almacen, secretos, orquestador, pegador, groq, teclado, reconstruirAtajos, abrirPanel, pastilla: () => pastilla, prepararMic: () => prepararMic(almacen), aprendiz, AJUSTES_POR_DEFECTO });
   } catch (e) {
     if (e.code !== 'MODULE_NOT_FOUND') throw e;
   }
+
+  setTimeout(aplicarMotor, 2500);
 
   if (app.isPackaged) {
     const a = almacen.leer('ajustes', {});
@@ -405,5 +445,6 @@ app.on('child-process-gone', (_e, detalles) => console.error('Proceso caído:', 
 app.on('window-all-closed', () => { /* sigue viva en la bandeja */ });
 app.on('will-quit', () => {
   if (teclado) teclado.detener();
+  if (motorLocal) motorLocal.detener();
   if (sistema) sistema.cerrar();
 });

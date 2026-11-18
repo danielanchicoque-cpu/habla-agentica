@@ -1,7 +1,7 @@
 {
   "name": "habla-agentica",
   "productName": "Habla Agéntica",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Dictado por voz en español con prompts editables",
   "main": "src/main/index.js",
   "author": "Daniel Anchicoque Martínez",

@@ -1,5 +1,19 @@
 # Cambios
 
+## 0.3.0
+
+**Modo local: transcribir sin internet.**
+- Nuevo ajuste **Transcripción** con tres opciones: en la nube (Groq, como siempre), en este computador, o automático (nube y, si no hay internet o Groq falla, local).
+- El motor es whisper.cpp 1.9.2 con modelos de Whisper. Se instala desde **Ajustes → Modo local** con un paquete *Rápido* (tarjeta NVIDIA, 1,2 GB, menos de medio segundo por dictado medido en una RTX 4050) o *Ligero* (cualquier computador, 198 MB, unos 3 segundos). La app recomienda uno según tu equipo.
+- Todo lo que se descarga se verifica con una huella SHA-256 fija en la app, y las direcciones apuntan a versiones inmutables. Si no coincide, no se usa.
+- El motor queda cargado en segundo plano para que cada dictado sea inmediato, y se libera tras 30 minutos sin usarse. Si la app se cierra a la fuerza, al volver a abrirla se cierra el servidor que quedó huérfano.
+- Sin key de Groq, o con **Pulir el texto con la IA de Groq** apagado, el texto se pega tal como sale de la transcripción (con tu diccionario). Los comandos de voz sobre texto seleccionado siguen necesitando Groq.
+- Cada dictado del Historial indica si se hizo en local.
+
+**Arreglos.**
+- Ajustes podía dibujarse doble (y dejar marcada una sola de dos opciones) si se pedía abrir la pantalla dos veces seguidas. Las navegaciones ahora se hacen una tras otra.
+- La barra lateral ya no dice "Falta la key de Groq" cuando usas solo el modo local.
+
 ## 0.2.0
 
 **Se actualiza sola.** Desde esta versión la app busca versiones nuevas en GitHub, las descarga en segundo plano y avisa para reiniciar. También hay un botón en Ajustes → Actualizaciones. Quien tenga la 0.1.0 debe instalar la 0.2.0 a mano una vez; de ahí en adelante se actualiza sola.

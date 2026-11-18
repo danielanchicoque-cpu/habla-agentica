@@ -29,8 +29,16 @@ const ALUCINACIONES = [
 ];
 const esAlucinacion = (texto) => ALUCINACIONES.includes(normalizar(texto).replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim());
 
+// Fallas de conexión con Groq: en modo automático se reintenta en el motor local.
+const ERRORES_DE_RED = ['red', 'timeout', 'servidor'];
+const errorTipo = (tipo, mensaje) => Object.assign(new Error(mensaje), { tipo });
+
 const MENSAJES = {
   key: 'Revisa tu key de Groq',
+  'sin-instalar': 'Instala el modo local en Ajustes',
+  arranque: 'El motor local no pudo arrancar',
+  transcripcion: 'Falló el modo local, audio guardado',
+  conversion: 'No se pudo preparar el audio',
   red: 'Sin conexión, audio guardado',
   timeout: 'Sin conexión, audio guardado',
   servidor: 'Groq falló, audio guardado',
@@ -48,7 +56,7 @@ function contarPalabras(t) {
 }
 
 function crearOrquestador(deps) {
-  const { almacen, dirAudios, generarId, ahora, secretos, sistema, pegador, pastilla, groq, aprendiz } = deps;
+  const { almacen, dirAudios, generarId, ahora, secretos, sistema, pegador, pastilla, groq, aprendiz, motorLocal, aWav } = deps;
   const oyentes = [];
   let grabacion = null; // { modo, proceso: Promise<string>, seleccion: Promise<string>|null }
   let esperandoAudio = null;
@@ -158,6 +166,40 @@ function crearOrquestador(deps) {
     });
   }
 
+  async function transcribirLocal(t, pistas) {
+    if (!motorLocal || !motorLocal.instalado()) throw errorTipo('sin-instalar', 'El modo local no está instalado');
+    let wav;
+    try {
+      wav = await aWav(t.audio);
+    } catch (e) {
+      throw errorTipo('conversion', `No se pudo convertir el audio: ${e.message}`);
+    }
+    return motorLocal.transcribir({ wav, pista: pistas });
+  }
+
+  // Elige dónde transcribir: nube (Groq), local, o automático (nube y, si no
+  // hay conexión, local).
+  async function transcribirAudio({ t, a, key, pistas }) {
+    const motor = a.motorVoz || 'nube';
+    const nube = async () => {
+      if (!key) throw new ErrorGroq('key');
+      return { texto: await groq.transcribir({ audio: t.audio, key, modelo: a.modeloVoz || 'whisper-large-v3', pistas }), motor: 'nube' };
+    };
+    const local = async () => ({ texto: await transcribirLocal(t, pistas), motor: 'local' });
+    if (motor === 'local') return local();
+    if (motor === 'auto') {
+      const hayLocal = !!motorLocal && motorLocal.instalado();
+      if (!key && hayLocal) return local();
+      try {
+        return await nube();
+      } catch (e) {
+        if (hayLocal && ERRORES_DE_RED.includes(e.tipo)) return local();
+        throw e;
+      }
+    }
+    return nube();
+  }
+
   async function procesar(t, { pegar }) {
     const base = { id: t.id, fecha: (t.fecha || ahora().toISOString()), app: '', duracionSeg: t.duracionSeg, crudo: '', pulido: '', palabras: 0, promptUsado: '' };
     const proceso = await t.proceso;
@@ -175,15 +217,20 @@ function crearOrquestador(deps) {
     const dic = almacen.leer('diccionario', { palabras: [], snippets: [] });
     const prompts = almacen.leer('prompts', null);
 
+    const key = await Promise.resolve(secretos.obtenerKey()).catch(() => null);
+    t.key = key;
+    // Sin key, o si el usuario lo prefiere, el texto no se pule con la IA de Groq.
+    const sinPulir = a.pulirEnNube === false || !key;
     let crudo;
+    let motorUsado = 'nube';
     try {
-      const key = await secretos.obtenerKey();
-      if (!key) throw new ErrorGroq('key');
-      t.key = key;
       const t0 = Date.now();
-      crudo = await groq.transcribir({ audio: t.audio, key, modelo: a.modeloVoz || 'whisper-large-v3', pistas: pistasWhisper(dic) });
+      ({ texto: crudo, motor: motorUsado } = await transcribirAudio({ t, a, key, pistas: pistasWhisper(dic) }));
       tiempos.voz = Date.now() - t0;
     } catch (e) {
+      if (e.tipo === 'sin-instalar' || e.tipo === 'arranque' || e.tipo === 'transcripcion' || e.tipo === 'conversion') {
+        console.error('Habla Agéntica: transcripción local', e.message);
+      }
       const nombre = t.audioGuardado || `${t.id}.webm`;
       fs.mkdirSync(dirAudios, { recursive: true });
       fs.writeFileSync(path.join(dirAudios, nombre), t.audio);
@@ -201,6 +248,13 @@ function crearOrquestador(deps) {
     const conDiccionario = aplicarDiccionario(crudo, dic);
     const snippet = (dic.snippets || []).find((s) => normalizar(s.frase) === normalizar(crudo));
     const seleccion = t.seleccion ? await t.seleccion.catch(() => '') : '';
+
+    // Un comando de voz necesita la IA: sin ella no hay nada que aplicar al texto.
+    if (!snippet && t.modo === 'comando' && seleccion && sinPulir) {
+      guardarEntrada({ ...base, crudo, estado: 'vacio', motor: motorUsado });
+      emitir('error', 'Los comandos necesitan la IA de Groq');
+      return;
+    }
 
     let pulido;
     let estado = 'pulido';
@@ -223,17 +277,22 @@ function crearOrquestador(deps) {
         promptUsado = promptApp.id;
       }
       const t1 = Date.now();
-      try {
-        pulido = await groq.pulir({ texto, instruccionSistema, key: t.key, modelo: a.modeloPulido || 'openai/gpt-oss-120b' });
-      } catch {
+      if (sinPulir) {
         pulido = conDiccionario;
         estado = 'crudo';
+      } else {
+        try {
+          pulido = await groq.pulir({ texto, instruccionSistema, key: t.key, modelo: a.modeloPulido || 'openai/gpt-oss-120b' });
+        } catch {
+          pulido = conDiccionario;
+          estado = 'crudo';
+        }
       }
       tiempos.pulido = Date.now() - t1;
     }
 
     // Se guarda antes de pegar: si el portapapeles falla, el texto no se pierde.
-    const entrada = { ...base, crudo, pulido, palabras: contarPalabras(pulido), promptUsado, estado, tiempos };
+    const entrada = { ...base, crudo, pulido, palabras: contarPalabras(pulido), promptUsado, estado, tiempos, motor: motorUsado };
     guardarEntrada(entrada);
     if (pegar) {
       try {
@@ -249,7 +308,7 @@ function crearOrquestador(deps) {
     }
     // Vigila el campo unos segundos: si corriges una palabra, la aprende.
     if (pegar && aprendiz && a.aprenderCorrecciones !== false) aprendiz.observar({ pulido }).catch(() => {});
-    if (estado === 'crudo') emitir('aviso', 'Pegado sin pulir');
+    if (estado === 'crudo' && !sinPulir) emitir('aviso', 'Pegado sin pulir');
     else emitir('reposo');
   }
 

@@ -1,11 +1,12 @@
 // Canales IPC que usa el panel (window.habla.* en el renderer).
 const { ipcMain, BrowserWindow } = require('electron');
+const { detectarHardware } = require('./motorLocal');
 const { copiaFabrica } = require('./promptsFabrica');
 const { importarWispr, rutaWisprPorDefecto } = require('./importadorWispr');
 const { buscarHistorial, mezclarImportacion, calcularStats, calcularInsights } = require('./logicaPanel');
 
 function registrar(ctx) {
-  const { actualizador, versionApp, almacen, secretos, orquestador, pegador, groq, teclado, reconstruirAtajos, pastilla, prepararMic, aprendiz, AJUSTES_POR_DEFECTO } = ctx;
+  const { motorLocal, aplicarMotor, actualizador, versionApp, almacen, secretos, orquestador, pegador, groq, teclado, reconstruirAtajos, pastilla, prepararMic, aprendiz, AJUSTES_POR_DEFECTO } = ctx;
   const h = (canal, fn) => ipcMain.handle(canal, (_e, ...args) => fn(...args));
   const ajustes = () => ({ ...AJUSTES_POR_DEFECTO, ...almacen.leer('ajustes', {}) });
 
@@ -19,6 +20,7 @@ function registrar(ctx) {
     almacen.escribir('ajustes', nuevo);
     if ('atajoDictado' in limpio || 'atajoComando' in limpio) reconstruirAtajos();
     if (('micId' in limpio || 'micListo' in limpio) && prepararMic) prepararMic();
+    if ('motorVoz' in limpio && aplicarMotor) aplicarMotor();
     if ('abrirAlIniciar' in limpio && require('electron').app.isPackaged) {
       require('electron').app.setLoginItemSettings({ openAtLogin: !!limpio.abrirAlIniciar });
     }
@@ -90,6 +92,26 @@ function registrar(ctx) {
   h('actualizacion:estado', () => (actualizador ? actualizador.estado() : sinActualizador()));
   h('actualizacion:buscar', () => (actualizador ? actualizador.buscar() : sinActualizador()));
   h('actualizacion:instalar', () => (actualizador ? actualizador.instalar() : false));
+
+  // Modo local (whisper.cpp): estado, instalación y desinstalación.
+  let hardware = null;
+  const estadoLocal = async () => {
+    if (!hardware) hardware = await detectarHardware();
+    return { ...motorLocal.estado(), paquetes: motorLocal.paquetes(), hardware };
+  };
+  h('local:estado', estadoLocal);
+  h('local:instalar', async (variante) => {
+    // No se espera a que termine: el avance llega por el evento 'local:estado'.
+    motorLocal.instalar(variante).then(() => { if (aplicarMotor) aplicarMotor(); });
+    return estadoLocal();
+  });
+  h('local:cancelar', () => { motorLocal.cancelarInstalacion(); return true; });
+  h('local:quitar', async () => {
+    await motorLocal.quitar();
+    const actual = almacen.leer('ajustes', {});
+    if (actual.motorVoz && actual.motorVoz !== 'nube') almacen.escribir('ajustes', { ...actual, motorVoz: 'nube' });
+    return estadoLocal();
+  });
 
   h('key:estado', async () => ((await secretos.obtenerKey()) ? 'ok' : 'falta'));
   h('key:guardar', async (k) => {
